@@ -1,0 +1,22 @@
+# Dependencies / runtime
+node_modules/
+
+# Secrets - never commit
+.env
+
+# Uploaded user images (private) - never commit
+uploads/
+
+# Local JSON store with live data
+data/
+
+# Local web server logs
+*.log
+*.err
+
+# Stale legacy prototype folder (kept on disk, not committed)
+lost-and-found-management-system-main/
+
+# YOLO model - intentionally committed, it is ~13MB (under GitHub's 100MB limit).
+# For a fresh download instead, see README "YOLO Object Detection Model".
+# models/*.onnx
