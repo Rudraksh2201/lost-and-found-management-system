@@ -328,13 +328,30 @@
 
                 <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                     <h3 class="font-bold text-slate-800 mb-1">Claims & Verification</h3>
-                    <p class="text-xs text-slate-500 mb-3">Review claim requests. Approving a claim marks the item as recovered.</p>
+                    <p class="text-xs text-slate-500 mb-3">Review ownership claims and acknowledge sightings. Only approved ownership claims mark an item recovered.</p>
                     <div id="claims-list" class="divide-y divide-slate-100"></div>
                 </div>
             </div>
         </section>
 
     </main>
+
+    <div id="smart-find-panel" class="hidden fixed bottom-24 right-4 sm:right-8 z-50 w-[calc(100%-2rem)] max-w-md bg-white rounded-2xl border border-indigo-200 shadow-2xl overflow-hidden">
+        <div class="bg-indigo-900 text-white p-4 flex items-start justify-between gap-3">
+            <div>
+                <h2 class="font-bold"><i class="fa-solid fa-wand-magic-sparkles mr-2 text-indigo-200"></i>Smart Find</h2>
+                <p class="text-xs text-indigo-200 mt-1">Describe it naturally. We’ll search lost and found reports.</p>
+            </div>
+            <button type="button" onclick="toggleSmartFind(false)" aria-label="Close Smart Find" class="text-indigo-200 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <form id="smart-find-form" class="p-4 space-y-3" onsubmit="submitSmartFind(event)">
+            <label for="smart-find-query" class="sr-only">Describe the item you lost or saw</label>
+            <textarea id="smart-find-query" rows="3" maxlength="500" required minlength="3" placeholder="e.g. I lost my black earbuds near the library yesterday" class="w-full resize-none px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+            <button id="smart-find-submit" type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl transition"><i class="fa-solid fa-magnifying-glass mr-2"></i>Find possible matches</button>
+        </form>
+        <div id="smart-find-results" aria-live="polite" class="hidden max-h-80 overflow-y-auto border-t border-slate-100 px-4 py-3"></div>
+    </div>
+    <button id="smart-find-toggle" type="button" onclick="toggleSmartFind()" aria-controls="smart-find-panel" aria-expanded="false" class="fixed bottom-5 right-4 sm:right-8 z-50 bg-indigo-700 hover:bg-indigo-800 text-white font-semibold text-sm px-4 py-3 rounded-full shadow-xl transition flex items-center gap-2"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Smart Find</span></button>
 
     <!-- Contact Info Modal -->
     <div id="contact-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
@@ -352,11 +369,12 @@
                 <p><strong>Description:</strong> <span id="modal-desc" class="text-slate-600"></span></p>
             </div>
             <div class="border border-slate-200 rounded-xl p-4 space-y-2 text-sm">
-                <p class="font-semibold text-slate-700 text-xs uppercase">Claim this item</p>
-                <input id="claim-name" placeholder="Your name *" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                <input id="claim-email" placeholder="Your email *" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                <textarea id="claim-note" rows="2" placeholder="Verification detail: distinguishing feature, contents or marking (admin only)" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
-                <button onclick="submitClaim()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2 rounded-lg transition">Submit Claim</button>
+                <p id="claim-form-title" class="font-semibold text-slate-700 text-xs uppercase">Claim this item</p>
+                <p id="claim-form-help" class="text-xs text-slate-500"></p>
+                <input id="claim-name" placeholder="Your name *" maxlength="120" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <input id="claim-email" type="email" placeholder="Your email *" maxlength="254" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <textarea id="claim-note" rows="2" maxlength="1000" placeholder="Verification detail: distinguishing feature, contents or marking (admin only)" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                <button id="claim-submit" onclick="submitClaim()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2 rounded-lg transition">Submit Claim</button>
             </div>
             <div class="text-xs text-slate-500 bg-amber-50 text-amber-800 p-3 rounded-lg border border-amber-200">
                 <i class="fa-solid fa-triangle-exclamation mr-1"></i> Please verify identity (e.g. showing Student ID Card or item specifics) before returning.
@@ -579,6 +597,62 @@
             }).join('');
         }
 
+        // ---------- FLOATING SMART FIND ----------
+        function toggleSmartFind(forceOpen) {
+            const panel = $id('smart-find-panel');
+            const open = typeof forceOpen === 'boolean' ? forceOpen : panel.classList.contains('hidden');
+            panel.classList.toggle('hidden', !open);
+            $id('smart-find-toggle').setAttribute('aria-expanded', String(open));
+            if (open) $id('smart-find-query').focus();
+        }
+
+        async function openSmartFindItem(id) {
+            try {
+                const data = await apiFetch(`/api/items/${encodeURIComponent(id)}`);
+                const item = data.item;
+                const index = items.findIndex(existing => String(existing.id) === String(item.id));
+                if (index === -1) items.push(item);
+                else items[index] = item;
+                toggleSmartFind(false);
+                openModal(item.id);
+            } catch (e) {
+                flash(e.message, true);
+            }
+        }
+
+        async function submitSmartFind(event) {
+            event.preventDefault();
+            const query = $id('smart-find-query').value.trim();
+            const button = $id('smart-find-submit');
+            const results = $id('smart-find-results');
+            button.disabled = true;
+            button.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-2"></i>Searching reports...';
+            results.classList.remove('hidden');
+            results.innerHTML = '<p class="text-sm text-slate-500">Checking reported items…</p>';
+            try {
+                const data = await apiFetch('/api/matches/assist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+                const hints = [...(data.extracted.colors || []), ...(data.extracted.brands || [])];
+                results.innerHTML = `
+                    <p class="text-sm font-semibold text-slate-700 mb-1">${esc(data.message)}</p>
+                    ${hints.length ? `<p class="text-xs text-slate-400 mb-3">Picked up: ${esc(hints.join(', '))}</p>` : '<div class="mb-3"></div>'}
+                    ${data.results.length ? `<div class="space-y-2">${data.results.map(item => `
+                        <button type="button" onclick="openSmartFindItem('${esc(item.id)}')" class="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition">
+                            <span class="flex items-center justify-between gap-2"><strong class="text-sm text-slate-800">${esc(item.title)}</strong><span class="shrink-0 text-xs font-bold text-indigo-700 bg-indigo-100 px-2 py-1 rounded-full">${esc(item.score)}% match</span></span>
+                            <span class="block text-xs text-slate-500 mt-1">${esc(item.type)} · ${esc(item.category)} · ${esc(item.location)} · ${esc(item.date)}</span>
+                            <span class="block text-[11px] text-slate-400 mt-1">${esc((item.reasons || []).slice(0, 2).join(' · '))}</span>
+                        </button>`).join('')}</div>` : ''}`;
+            } catch (e) {
+                results.innerHTML = `<p class="text-sm text-rose-600">${esc(e.message)}</p>`;
+            } finally {
+                button.disabled = false;
+                button.innerHTML = '<i class="fa-solid fa-magnifying-glass mr-2"></i>Find possible matches';
+            }
+        }
+
         // ---------- SUBMIT REPORTS ----------
         function handleFormSubmit(e, type) {
             e.preventDefault();
@@ -745,14 +819,16 @@
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 py-3 text-sm">
                         <div class="min-w-0">
                             <p class="font-semibold text-slate-700 truncate">${esc(c.claimantName)} <span class="text-slate-400 font-normal">(${esc(c.claimantEmail)})</span></p>
+                            <p class="text-xs font-medium ${c.kind === 'sighting' ? 'text-indigo-600' : 'text-emerald-700'}">${c.kind === 'sighting' ? 'Sighting report' : 'Ownership claim'}</p>
                             <p class="text-xs text-slate-500 truncate">on "${esc(c.itemTitle)}"</p>
                             ${c.note ? `<p class="text-xs text-slate-400 italic truncate">${esc(c.note)}</p>` : ''}
                         </div>
                         <div class="flex items-center gap-2 shrink-0">
-                            <span class="text-xs capitalize px-2 py-0.5 rounded-full ${c.status === 'approved' ? 'bg-blue-100 text-blue-700' : c.status === 'rejected' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}">${esc(c.status)}</span>
-                            ${c.status === 'pending' ? `
-                                <button onclick="reviewClaim('${esc(c.id)}','approve')" class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2.5 py-1 rounded font-medium transition">Approve</button>
-                                <button onclick="reviewClaim('${esc(c.id)}','reject')" class="text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 px-2.5 py-1 rounded font-medium transition">Reject</button>` : ''}
+                            <span class="text-xs capitalize px-2 py-0.5 rounded-full ${c.status === 'approved' ? 'bg-blue-100 text-blue-700' : c.status === 'acknowledged' ? 'bg-indigo-100 text-indigo-700' : c.status === 'rejected' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}">${esc(c.status)}</span>
+                            ${c.status === 'pending' ? (c.kind === 'sighting'
+                                ? `<button onclick="reviewClaim('${esc(c.id)}','acknowledge')" class="text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-2.5 py-1 rounded font-medium transition">Acknowledge</button>`
+                                : `<button onclick="reviewClaim('${esc(c.id)}','approve')" class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2.5 py-1 rounded font-medium transition">Approve</button>
+                                   <button onclick="reviewClaim('${esc(c.id)}','reject')" class="text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 px-2.5 py-1 rounded font-medium transition">Reject</button>`) : ''}
                         </div>
                     </div>`).join('');
             } catch (e) {
@@ -768,7 +844,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action })
                 });
-                const msg = action === 'approve' ? 'Claim approved; item marked recovered.' : 'Claim rejected.';
+                const msg = action === 'approve' ? 'Ownership claim approved; item marked recovered.' : action === 'acknowledge' ? 'Sighting report acknowledged.' : 'Claim rejected.';
                 flash(msg);
                 renderAdminTable();
             } catch (e) {
@@ -779,28 +855,39 @@
 
         // ---------- MODAL ----------
         let currentModalId = null;
+        let currentModalType = null;
 
         function openModal(id) {
             const item = items.find(i => String(i.id) === String(id));
             if (!item) return;
             currentModalId = String(item.id);
+            currentModalType = item.type;
             $id('modal-title').innerText = `${item.type} Item Details`;
             $id('modal-item-name').innerText = item.title;
             $id('modal-contact').innerText = item.contact;
             $id('modal-desc').innerText = item.desc;
+            $id('claim-form-title').innerText = item.type === 'Found' ? 'Claim this found item' : 'Report that you saw this item';
+            $id('claim-form-help').innerText = item.type === 'Found'
+                ? 'This item was found. Tell us how to verify that it belongs to you.'
+                : 'This item was reported lost. Share when and where you saw it so the owner can follow up.';
+            $id('claim-note').placeholder = item.type === 'Found'
+                ? 'Private verification detail: distinguishing feature, contents or marking (admin only)'
+                : 'Where and when did you see it? Any identifying details? (shared with admins only)';
+            $id('claim-submit').innerText = item.type === 'Found' ? 'Submit Ownership Claim' : 'Submit Sighting Report';
             $id('contact-modal').classList.remove('hidden');
         }
 
         function closeModal() {
             $id('contact-modal').classList.add('hidden');
             currentModalId = null;
+            currentModalType = null;
         }
 
         async function submitClaim() {
             const name = $id('claim-name').value.trim();
             const email = $id('claim-email').value.trim();
             const note = $id('claim-note').value.trim();
-            if (!currentModalId || !name || !email.includes('@')) {
+            if (!currentModalId || !currentModalType || !name || !email.includes('@')) {
                 flash('Enter your name and a valid email.', true);
                 return;
             }
@@ -808,10 +895,11 @@
                 await apiFetch('/api/claims', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ itemId: currentModalId, claimantName: name, claimantEmail: email, note })
+                    body: JSON.stringify({ itemId: currentModalId, claimantName: name, claimantEmail: email, note, kind: currentModalType === 'Found' ? 'ownership' : 'sighting' })
                 });
+                const submittedKind = currentModalType;
                 closeModal();
-                flash('Claim submitted for admin review.');
+                flash(submittedKind === 'Found' ? 'Ownership claim submitted for admin review.' : 'Sighting report submitted for admin review.');
             } catch (e) { flash(e.message, true); }
         }
 

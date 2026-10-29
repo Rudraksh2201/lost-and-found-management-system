@@ -17,16 +17,25 @@ function objId(v) {
 
 async function allItems() { return Item.find().lean(); }
 
-async function listItems(f) {
+async function listItems(f = {}) {
   const q = {};
-  if (f.search) q.$or = [
-    { title: { $regex: f.search, $options: 'i' } },
-    { desc: { $regex: f.search, $options: 'i' } }
-  ];
-  if (f.category && f.category !== 'All') q.category = f.category;
-  if (f.location && f.location !== 'All') q.location = f.location;
-  if (f.status && f.status !== 'All') q.status = f.status;
-  if (f.type && f.type !== 'All') q.type = f.type;
+  const value = key => typeof f[key] === 'string' ? f[key].trim() : '';
+  const search = value('search').slice(0, 100);
+  if (search) {
+    const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    q.$or = [
+      { title: { $regex: escaped, $options: 'i' } },
+      { desc: { $regex: escaped, $options: 'i' } }
+    ];
+  }
+  const category = value('category');
+  const location = value('location');
+  const status = value('status');
+  const type = value('type');
+  if (category && category !== 'All') q.category = category;
+  if (location && location !== 'All') q.location = location;
+  if (status && status !== 'All') q.status = status;
+  if (type && type !== 'All') q.type = type;
   return Item.find(q).sort({ createdAt: -1 }).limit(200).lean();
 }
 
@@ -49,11 +58,19 @@ async function updateItem(id, patch) {
 async function deleteItem(id) {
   const _id = objId(id);
   if (!_id) return false;
+  const deleted = await Item.findByIdAndDelete(_id);
+  if (!deleted) return false;
   await Claim.deleteMany({ itemId: _id });
-  return !!(await Item.findByIdAndDelete(_id));
+  return true;
 }
 
 async function listClaims() { return Claim.find().sort({ createdAt: -1 }).lean(); }
+
+async function getClaim(id) {
+  const _id = objId(id);
+  if (!_id) return null;
+  return Claim.findById(_id).lean();
+}
 
 async function createClaim(data) {
   return (await Claim.create(data)).toObject();
@@ -75,4 +92,4 @@ async function stats() {
   return { lost, found, recovered, total: lost + found + recovered, pendingClaims };
 }
 
-module.exports = { init, allItems, listItems, getItem, createItem, updateItem, deleteItem, listClaims, createClaim, updateClaim, stats, model: Item };
+module.exports = { init, allItems, listItems, getItem, createItem, updateItem, deleteItem, listClaims, getClaim, createClaim, updateClaim, stats, model: Item };

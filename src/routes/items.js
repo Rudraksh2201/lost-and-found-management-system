@@ -11,43 +11,49 @@ const auth = require('../auth');
 const router = express.Router();
 
 const VALID_TYPES = ['Lost', 'Found'];
-const VALID_STATUS = ['Lost', 'Found', 'Recovered'];
-
 function cleanPayload(body) {
-  const type = String(body.type || '');
-  const title = String(body.title || '').trim();
-  const desc = String(body.desc || '').trim();
-  const category = String(body.category || '').trim();
-  const location = String(body.location || '').trim();
-  const date = String(body.date || '').trim();
-  const contact = String(body.contact || '').trim();
-  const reporterName = String(body.reporterName || '').trim().slice(0, 120);
+  const value = key => typeof body?.[key] === 'string' ? body[key].trim() : '';
+  const type = value('type');
+  const title = value('title');
+  const desc = value('desc');
+  const category = value('category');
+  const location = value('location');
+  const date = value('date');
+  const contact = value('contact');
+  const reporterName = value('reporterName');
+  const imageUrl = value('imageUrl');
 
   const errors = [];
   if (!VALID_TYPES.includes(type)) errors.push('type must be Lost or Found');
   if (title.length < 3 || title.length > 200) errors.push('title must be 3-200 characters');
   if (desc.length < 3 || desc.length > 2000) errors.push('description must be 3-2000 characters');
-  if (!category) errors.push('category is required');
-  if (!location) errors.push('location is required');
-  if (!contact) errors.push('contact is required');
+  if (!category || category.length > 80) errors.push('category is required and must be at most 80 characters');
+  if (!location || location.length > 160) errors.push('location is required and must be at most 160 characters');
+  if (!contact || contact.length > 254) errors.push('contact is required and must be at most 254 characters');
+  if (reporterName.length > 120) errors.push('reporter name must be at most 120 characters');
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.push('date must use YYYY-MM-DD format');
+  if (date && !Number.isFinite(Date.parse(`${date}T00:00:00Z`))) errors.push('date must be a valid calendar date');
+  if (imageUrl && (imageUrl.length > 2048 || !/^https?:\/\//i.test(imageUrl))) errors.push('image URL must be a valid HTTP(S) URL under 2048 characters');
 
   if (errors.length) {
     const err = new Error(errors.join('; '));
     err.status = 400;
     throw err;
   }
-  return { type, title, desc, category, location, date, contact, reporterName };
+  return { type, title, desc, category, location, date, contact, reporterName, imageUrl };
 }
 
-router.post('/', upload.single('image'), async (req, res, next) => {
+router.post('/', upload.single('image'), upload.validateImage, async (req, res, next) => {
   try {
     const data = cleanPayload(req.body);
-    const image = req.file
-      ? `/uploads/${req.file.filename}`
-      : String(req.body.imageUrl || '').trim();
+    if (req.file && data.imageUrl) {
+      return res.status(400).json({ error: 'Upload an image file or provide an image URL, not both.' });
+    }
+    const image = req.file ? `/uploads/${req.file.filename}` : data.imageUrl;
 
+    const { imageUrl, ...itemData } = data;
     const created = await store.createItem({
-      ...data,
+      ...itemData,
       image,
       status: data.type,
       detected: { available: false, labels: [] },
@@ -58,6 +64,7 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     const imagePath = req.file ? path.join(config.uploadDir, req.file.filename) : null;
     const enrich = await aiService.processItem(created, imagePath);
     const updated = await store.updateItem(created._id, enrich);
+    if (!updated) throw new Error('Item was created but could not be updated with AI results');
 
     const matches = matcher.matchItem(updated, await store.allItems())
       .slice(0, 4)
@@ -74,7 +81,13 @@ router.post('/', upload.single('image'), async (req, res, next) => {
 
 router.get('/', async (req, res, next) => {
   try {
-    const items = await store.listItems(req.query);
+    const items = await store.listItems({
+      search: req.query.search,
+      category: req.query.category,
+      location: req.query.location,
+      status: req.query.status,
+      type: req.query.type
+    });
     res.json({ items: items.map(toApi) });
   } catch (e) { next(e); }
 });

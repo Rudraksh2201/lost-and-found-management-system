@@ -7,24 +7,38 @@ let db = { items: [], claims: [] };
 let nextId = 1;
 
 function load() {
-  if (fs.existsSync(config.dbFile)) {
-    const parsed = JSON.parse(fs.readFileSync(config.dbFile, 'utf8'));
-    db.items = parsed.items || [];
-    db.claims = parsed.claims || [];
-  } else {
+  if (!fs.existsSync(config.dbFile)) {
     db = { items: [], claims: [] };
+    nextId = 1;
+    return false;
   }
-  nextId = db.items.reduce((m, i) => Math.max(m, parseInt(String(i._id), 10) || 0), 0) + 1;
+
+  const parsed = JSON.parse(fs.readFileSync(config.dbFile, 'utf8'));
+  if (!parsed || !Array.isArray(parsed.items) || !Array.isArray(parsed.claims)) {
+    throw new Error(`Invalid JSON store format at ${config.dbFile}`);
+  }
+  db = parsed;
+  nextId = [...db.items, ...db.claims].reduce((max, row) => {
+    return Math.max(max, parseInt(String(row._id), 10) || 0);
+  }, 0) + 1;
+  return true;
 }
 
 function persist() {
   fs.mkdirSync(path.dirname(config.dbFile), { recursive: true });
-  fs.writeFileSync(config.dbFile, JSON.stringify(db, null, 2));
+  const tempFile = `${config.dbFile}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), { mode: 0o600 });
+    fs.renameSync(tempFile, config.dbFile);
+  } catch (error) {
+    try { fs.unlinkSync(tempFile); } catch (_) { /* best-effort temp cleanup */ }
+    throw error;
+  }
 }
 
 async function init() {
-  load();
-  if (db.items.length === 0) {
+  const storeExists = load();
+  if (!storeExists) {
     const now = new Date().toISOString();
     db.items = sampleItems().map(s => ({
       _id: String(nextId++), ...s, createdAt: now, updatedAt: now
@@ -35,14 +49,19 @@ async function init() {
 
 function allItems() { return db.items; }
 
-async function listItems(f) {
+async function listItems(f = {}) {
   let out = [...db.items];
-  const s = (f.search || '').toLowerCase();
-  if (s) out = out.filter(i => i.title.toLowerCase().includes(s) || i.desc.toLowerCase().includes(s));
-  if (f.category && f.category !== 'All') out = out.filter(i => i.category === f.category);
-  if (f.location && f.location !== 'All') out = out.filter(i => i.location === f.location);
-  if (f.status && f.status !== 'All') out = out.filter(i => i.status === f.status);
-  if (f.type && f.type !== 'All') out = out.filter(i => i.type === f.type);
+  const value = key => typeof f[key] === 'string' ? f[key].trim() : '';
+  const s = value('search').toLowerCase().slice(0, 100);
+  if (s) out = out.filter(i => String(i.title || '').toLowerCase().includes(s) || String(i.desc || '').toLowerCase().includes(s));
+  const category = value('category');
+  const location = value('location');
+  const status = value('status');
+  const type = value('type');
+  if (category && category !== 'All') out = out.filter(i => i.category === category);
+  if (location && location !== 'All') out = out.filter(i => i.location === location);
+  if (status && status !== 'All') out = out.filter(i => i.status === status);
+  if (type && type !== 'All') out = out.filter(i => i.type === type);
   return out.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 200);
 }
 
@@ -79,6 +98,10 @@ async function deleteItem(id) {
 
 async function listClaims() { return [...db.claims]; }
 
+async function getClaim(id) {
+  return db.claims.find(c => String(c._id) === String(id)) || null;
+}
+
 async function createClaim(data) {
   const now = new Date().toISOString();
   const claim = { _id: String(nextId++), ...data, createdAt: now, updatedAt: now };
@@ -105,4 +128,4 @@ async function stats() {
   return { lost, found, recovered, total: db.items.length, pendingClaims: db.claims.filter(c => c.status === 'pending').length };
 }
 
-module.exports = { init, allItems, listItems, getItem, createItem, updateItem, deleteItem, listClaims, createClaim, updateClaim, stats };
+module.exports = { init, allItems, listItems, getItem, createItem, updateItem, deleteItem, listClaims, getClaim, createClaim, updateClaim, stats };

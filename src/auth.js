@@ -2,7 +2,48 @@ const crypto = require('crypto');
 const config = require('./config');
 
 const sessions = new Map();
+const loginAttempts = new Map();
 const TTL_MS = 12 * 60 * 60 * 1000;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+const MAX_LOGIN_TRACKED_IPS = 10000;
+
+function loginRateLimit(req, res, next) {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  let attempt = loginAttempts.get(ip);
+
+  if (!attempt || now - attempt.startedAt >= LOGIN_WINDOW_MS) {
+    attempt = { startedAt: now, count: 0, blockedUntil: 0 };
+    loginAttempts.set(ip, attempt);
+  }
+
+  if (attempt.blockedUntil > now) {
+    res.set('Retry-After', String(Math.ceil((attempt.blockedUntil - now) / 1000)));
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+
+  req.recordLoginResult = success => {
+    if (success) {
+      loginAttempts.delete(ip);
+      return;
+    }
+
+    attempt.count++;
+    if (attempt.count >= LOGIN_MAX_ATTEMPTS) attempt.blockedUntil = Date.now() + LOGIN_WINDOW_MS;
+
+    if (loginAttempts.size > MAX_LOGIN_TRACKED_IPS) {
+      for (const [key, entry] of loginAttempts) {
+        if (Date.now() - entry.startedAt >= LOGIN_WINDOW_MS) {
+          loginAttempts.delete(key);
+        }
+        if (loginAttempts.size <= MAX_LOGIN_TRACKED_IPS) break;
+      }
+    }
+  };
+
+  next();
+}
 
 function adminConfigured() {
   return !!(config.adminUsername && config.adminPassword);
@@ -22,8 +63,12 @@ function login(username, password) {
   if (!safeEqual(username, config.adminUsername) || !safeEqual(password, config.adminPassword)) {
     return { ok: false, error: 'Invalid username or password' };
   }
+  const now = Date.now();
+  for (const [sessionToken, session] of sessions) {
+    if (session.expiresAt <= now) sessions.delete(sessionToken);
+  }
   const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, { expiresAt: Date.now() + TTL_MS });
+  sessions.set(token, { expiresAt: now + TTL_MS });
   return { ok: true, token };
 }
 
@@ -52,4 +97,4 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { login, verify, logout, requireAdmin, adminConfigured };
+module.exports = { login, verify, logout, requireAdmin, adminConfigured, loginRateLimit };

@@ -7,8 +7,10 @@ const store = require('./src/db/store');
 const auth = require('./src/auth');
 
 const app = express();
+app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false, limit: '1mb', parameterLimit: 100 }));
 
 app.use(express.static(path.resolve(__dirname, 'public')));
 app.use('/uploads', express.static(config.uploadDir));
@@ -33,9 +35,20 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err);
   const status = err.status || (err.name === 'MulterError' ? 400 : 500);
-  res.status(status).json({ error: err.message || 'Server error' });
+  if (status >= 500) {
+    console.error('Request failed:', err);
+    return res.status(status).json({ error: 'Server error' });
+  }
+  if (err.name === 'MulterError') {
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? `Image exceeds the ${config.imgMaxMB} MB upload limit.`
+      : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE'
+        ? 'Only one image file is allowed.'
+        : err.message;
+    return res.status(status).json({ error: message });
+  }
+  res.status(status).json({ error: err.message || 'Request failed' });
 });
 
 store.init()
